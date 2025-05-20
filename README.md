@@ -1,6 +1,6 @@
 # 2025 CG PJ
 
-这是`2025 CG PJ: CAD`。
+这是2025 CG PJ: CAD。
 
 ## Environment Setup
 
