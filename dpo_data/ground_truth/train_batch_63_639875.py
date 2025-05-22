@@ -1,0 +1,4 @@
+import cadquery as cq
+w0=cq.Workplane('XY',origin=(0,0,-3))
+w1=cq.Workplane('XY',origin=(0,0,12))
+r=w0.sketch().segment((-92,71),(-79,54)).arc((-74,43),(-65,36)).segment((-51,19)).segment((-15,47)).segment((-28,65)).arc((-33,75),(-42,82)).segment((-56,100)).close().assemble().reset().face(w0.sketch().arc((23,-2),(25,-51),(73,-59)).arc((74,-52),(80,-53)).arc((92,-20),(72,9)).arc((34,65),(23,-2)).assemble()).finalize().extrude(-70).union(w0.sketch().segment((-2,-64),(19,-100)).segment((20,-99)).segment((0,-63)).close().assemble().finalize().extrude(64)).union(w1.sketch().segment((-21,-19),(-18,-19)).segment((-18,-37)).segment((38,-37)).segment((38,13)).segment((-18,13)).segment((-18,-10)).segment((-21,-10)).close().assemble().finalize().extrude(61))
