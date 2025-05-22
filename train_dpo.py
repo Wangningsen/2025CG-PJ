@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import trimesh
-import wandb
+import tensorboard
 from datasets import Dataset, Features, Value, Sequence, Array2D
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from pytorch3d.ops import sample_farthest_points
@@ -21,15 +21,10 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 from trl.trainer.utils import flush_left, pad, pad_to_length, selective_log_softmax
-
-
 ######## CONFIG ########
-
 NUM_POINT_TOKENS = 256 # As mentioned in paper Sec 4.3
 MAX_CODE_TOKENS = 768 # Adjust based on your dataset analysis
 MAX_SEQ_LENGTH = NUM_POINT_TOKENS + MAX_CODE_TOKENS # Set max_seq_length in TraiiningConfig
-
-
 ######## MODELs ########
 
 class FourierPointEncoder(torch.nn.Module):
@@ -55,16 +50,12 @@ class FourierPointEncoder(torch.nn.Module):
 
 
 class CADRecode(Qwen2ForCausalLM):
-    # Keep __init__ as you have it, ensuring point_encoder uses float32 internally if needed
     def __init__(self, config):
         super().__init__(config) # Call Qwen2ForCausalLM's __init__
 
         # Store hidden_size explicitly if needed elsewhere, otherwise use config.hidden_size
         self._hidden_size = config.hidden_size
         self.num_point_tokens = NUM_POINT_TOKENS
-
-        # Create point encoder - ensure it's compatible with the model's dtype expectations
-        # We might need to manage dtypes carefully during the forward pass
         self.point_encoder = FourierPointEncoder(config.hidden_size)
 
     # Add gradient checkpointing enabling for the point encoder if needed
@@ -88,23 +79,6 @@ class CADRecode(Qwen2ForCausalLM):
         cache_position: Optional[torch.LongTensor] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
-        # print("################")
-        # print(f"[Model] input_ids: {input_ids.shape if isinstance(input_ids, torch.Tensor) else input_ids}")
-        # print(f"[Model] attention_mask: {attention_mask.shape if isinstance(attention_mask, torch.Tensor) else attention_mask}")
-        # print(f"[Model] point_cloud: {point_cloud.shape if isinstance(point_cloud, torch.Tensor) else point_cloud}")
-        # print(f"[Model] position_ids: {position_ids.shape if isinstance(position_ids, torch.Tensor) else position_ids}")
-        # print(f"[Model] past_key_values: {past_key_values if isinstance(past_key_values, torch.Tensor) else past_key_values}")
-        # print(f"[Model] inputs_embeds: {inputs_embeds if isinstance(inputs_embeds, torch.Tensor) else inputs_embeds}")
-        # print(f"[Model] labels: {labels.shape if isinstance(labels, torch.Tensor) else labels}")
-        # print(f"[Model] use_cache: {use_cache}")
-        # print(f"[Model] output_attentions: {output_attentions}")
-        # print(f"[Model] output_hidden_states: {output_hidden_states}")
-        # print(f"[Model] return_dict: {return_dict}")
-        # print(f"[Model] cache_position: {cache_position.shape if isinstance(cache_position, torch.Tensor) else cache_position}")
-        # print("################")
-
-        # Determine if this is the first forward pass (no past_key_values)
-        # and if we need to process point clouds based on input args
         is_first_step = (past_key_values is None)
         # Need point cloud if it's the first step and input_ids are present
         process_points = (is_first_step and point_cloud is not None and input_ids is not None)
@@ -127,14 +101,11 @@ class CADRecode(Qwen2ForCausalLM):
             if point_embeds.shape[1] != num_point_tokens:
                 # Handle mismatch, maybe slice point_embeds or raise error
                 print(f"Warning: Mismatch point embeds {point_embeds.shape[1]} vs placeholders {num_point_tokens}")
-                # Example: Slice point_embeds if too long, pad if too short (needs pad value)
-                # point_embeds = point_embeds[:, :num_point_tokens, :] # Simple truncate
 
             # 3. Combine Embeddings: [Point | Code]
             inputs_embeds = torch.cat([point_embeds, code_embeds], dim=1)
 
             # 4. Adjust Attention Mask (replace -1 with 1)
-            # Assuming attention_mask was passed correctly from collator
             final_attention_mask = torch.where(attention_mask == -1, 1, attention_mask)
             input_ids = None # Using embeddings now
         elif inputs_embeds is None:
@@ -176,9 +147,6 @@ class CADRecode(Qwen2ForCausalLM):
 
         # --- Return ---
         if not return_dict:
-            # Ensure output structure matches base class expectations
-            # Typically (logits, past_key_values, hidden_states, attentions)
-            # outputs[1:] contains the rest after hidden_states (outputs[0])
             output = (logits,) + outputs[1:]
             #return (loss,) + output if loss is not None else output (NOTE: SOMEHOW TRAINING FAILS)
 
@@ -195,108 +163,164 @@ class CADRecode(Qwen2ForCausalLM):
             attentions=attentions_out,
         )
 
-    # prepare_inputs_for_generation needs careful adjustment if using point clouds
-    # It needs to ensure 'point_cloud' is passed correctly and potentially handle
-    # the initial embedding generation if `inputs_embeds` isn't managed externally.
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, point_cloud=None, attention_mask=None, **kwargs):
         # Standard logic from base class
         model_inputs = super().prepare_inputs_for_generation(input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, attention_mask=attention_mask, **kwargs)
 
-        # Ensure point_cloud is passed along
-        # Generation usually starts with input_ids, so the first forward call needs point_cloud
-        # Subsequent calls use past_key_values and don't need the full point_cloud tensor again,
-        # but we need to pass *something* or None to satisfy the signature.
-        # This depends heavily on how generation is initiated.
-        # Let's assume point_cloud is only needed for the *first* step.
         if past_key_values is None:
              model_inputs['point_cloud'] = point_cloud
         else:
              model_inputs['point_cloud'] = None # Not needed after first step
 
-        # The attention mask also needs special handling during generation if it contains -1
-        # This might require overriding the generation loop or careful setup.
-        # For now, assume the initial attention_mask is prepared correctly outside.
         model_inputs['attention_mask'] = attention_mask
 
         return model_inputs
-
-
 ######## DATASETS ########
-
-
 class Fusion360DPODataset(torch.utils.data.Dataset):
-    def __init__(self, fusion360_root: str, split: Literal["train", "test"], num_points=NUM_POINT_TOKENS, num_pre_points=8192) -> None:
+    def __init__(self, data_root: str, split: Literal["train", "validation"], num_points=NUM_POINT_TOKENS, num_pre_points=8192) -> None:
         self.data = []
-        with open(os.path.join(fusion360_root, f"train_test.json"), 'r') as f:
-            uuid_list = json.load(f)[split]
-        for uuid in uuid_list:
-            winner_path = os.path.join(fusion360_root, "cadquery", f"{uuid}_winner.py")
-            loser_path = os.path.join(fusion360_root, "cadquery", f"{uuid}_loser.py")
-            if os.path.isfile(winner_path) and os.path.isfile(loser_path):
-                self.data.append({
-                    "uuid": uuid,
-                    "gt_mesh": os.path.join(fusion360_root, "reconstruction", f"{uuid}.obj"),
-                    "winner": winner_path,
-                    "loser": loser_path,
-                })
-        print(f"[Fusion360DPODataset] Found {len(self.data)}/{len(uuid_list)} valid {split} samples.")
+        # train_test.json 文件应位于 data_root 中
+        split_file_path = os.path.join(data_root, "train_val.json")
+        try:
+            with open(split_file_path, 'r') as f:
+                # JSON包含一个字典，键是拆分 ("train", "validation")
+                # 值是标识符列表 (例如 "train_batch_63_630020")
+                identifiers_list = json.load(f)[split]
+        except FileNotFoundError:
+            print(f"错误：拆分文件 {split_file_path} 未找到。")
+            raise
+        except KeyError:
+            print(f"错误：拆分 '{split}' 在 {split_file_path} 中未找到。")
+            raise
 
-        self.data.sort(key=lambda d: d["uuid"]) # Sort by uuid
+        for identifier in identifiers_list:
+            winner_path = os.path.join(data_root, "cadquery", f"{identifier}_winner.py")
+            loser_path = os.path.join(data_root, "cadquery", f"{identifier}_loser.py")
+            # GT 网格是位于 'reconstruction' 子目录中的 STL 文件
+            gt_mesh_path = os.path.join(data_root, "reconstruction", f"{identifier}.stl")
+
+            if os.path.isfile(winner_path) and os.path.isfile(loser_path) and os.path.isfile(gt_mesh_path):
+                self.data.append({
+                    "identifier": identifier, # 存储标识符
+                    "gt_mesh_path": gt_mesh_path,
+                    "winner_path": winner_path,
+                    "loser_path": loser_path,
+                })
+            # else:
+                # 在 dpo_generator 中记录跳过的样本总数，这里可以减少冗余打印
+                # print(f"警告: 标识符 {identifier} 的文件缺失。将跳过。")
+
+        print(f"[dpo_dataset] 在 {data_root} 中为拆分 '{split}' 找到 {len(self.data)}/{len(identifiers_list)} 个有效样本。")
+        if not self.data and identifiers_list: # 如果列表不为空但没有加载数据，说明有问题
+             print(f"警告：拆分 '{split}' 没有加载任何数据，尽管 train_test.json 中有条目。请检查路径和文件是否存在。")
+
+
+        self.data.sort(key=lambda d: d["identifier"]) # 按标识符排序
         self.num_points = num_points
         self.num_pre_points = num_pre_points
-        # Store im_start_token string/ID for convenience
-        self.im_start_token = "<|im_start|>" # Or fetch from tokenizer if it has an attribute
+        self.im_start_token = "<|im_start|>"
 
-    def mesh_to_point_cloud(self, mesh, n_points: int, n_pre_points: int):
-        vertices, _ = trimesh.sample.sample_surface(mesh, n_pre_points)
-        if len(vertices) < n_points:
-            raise ValueError(f"Mesh doesn't have enough vertices: {len(vertices)}=")
+    def mesh_to_point_cloud(self, mesh: trimesh.Trimesh, n_points: int, n_pre_points: int) -> Optional[np.ndarray]:
+        if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty or len(mesh.vertices) == 0:
+            return None
 
-        if n_pre_points == n_points: # If sampling exactly n_points, FPS is not needed
-            ids = np.arange(n_points)
+        if len(mesh.vertices) < n_pre_points:
+            n_pre_points = len(mesh.vertices)
+        if n_pre_points == 0:
+            return None
+
+        try:
+            vertices, _ = trimesh.sample.sample_surface(mesh, n_pre_points)
+        except Exception:
+            return None
+        if len(vertices) == 0:
+            return None
+
+        current_num_vertices = len(vertices)
+        target_n_points = n_points # 保存原始请求的点数以供最终检查
+
+        if current_num_vertices < target_n_points:
+            # 如果严格要求原始 n_points，则返回 None；否则调整 n_points
+            # 对于 DPO，我们希望点云维度一致，所以如果不能满足 self.num_points，则跳过
+            return None # 或者调整 n_points = current_num_vertices，但这会导致数据维度不一致
+
+        # 如果调整后的 n_points (或原始n_points) 等于预采样点数，则直接从预采样点中选择
+        if n_pre_points == target_n_points:
+            if current_num_vertices < target_n_points: return None
+            indices = np.random.choice(current_num_vertices, target_n_points, replace=False)
+            sampled_points = np.asarray(vertices[indices], dtype=np.float32)
         else:
-            # Ensure vertices tensor is float32 for FPS
-            _, ids = sample_farthest_points(torch.tensor(vertices, dtype=torch.float32).unsqueeze(0), K=n_points)
-            ids = ids[0].numpy()
+            if target_n_points > current_num_vertices : return None # K > N for FPS
+            try:
+                points_tensor = torch.tensor(vertices, dtype=torch.float32).unsqueeze(0)
+                if points_tensor.shape[1] == 0: return None
+                # 确保 K (target_n_points) 不大于 N (points_tensor.shape[1])
+                k_for_fps = min(target_n_points, points_tensor.shape[1])
+                if k_for_fps == 0 : return None
+                if k_for_fps < target_n_points: # 如果 FPS 无法采样到 target_n_points
+                    return None
 
-        sampled_points = np.asarray(vertices[ids], dtype=np.float32)
+                _, ids = sample_farthest_points(points_tensor, K=k_for_fps)
+                sampled_points = np.asarray(vertices[ids[0].cpu().numpy()], dtype=np.float32)
+            except Exception:
+                return None
+        
+        # 最终检查点数是否与类属性 num_points 一致
+        if sampled_points.shape[0] != self.num_points:
+            return None
         return sampled_points
 
     def __len__(self) -> int:
         return len(self.data)
 
-    def __getitem__(self, idx: int):
-        data = self.data[idx]
-        uuid = data["uuid"]
+    def __getitem__(self, idx: int) -> Optional[Dict]:
+        item_meta = self.data[idx] # 重命名以避免与最终返回的 item 混淆
+        identifier = item_meta["identifier"]
 
-        # load winner and loser code
-        with open(data["winner"], 'r') as f:
-            winner_code = f.read()
-        with open(data["loser"], 'r') as f:
-            loser_code = f.read()
+        try:
+            with open(item_meta["winner_path"], 'r') as f:
+                winner_code = f.read()
+            with open(item_meta["loser_path"], 'r') as f:
+                loser_code = f.read()
 
-        # load GT mesh
-        gt_mesh = trimesh.load_mesh(data["gt_mesh"])
-        if isinstance(gt_mesh, trimesh.Scene): # Handle scenes if necessary
-            print(f"Warning: Loaded a trimesh.Scene for {uuid}. Attempting to extract geometry.")
-            # Simple approach: combine all geometries
-            gt_mesh = gt_mesh.dump(concatenate=True)
-            if not isinstance(gt_mesh, trimesh.Trimesh) or len(gt_mesh.vertices) == 0:
-                raise ValueError(f"Warning: Loaded empty or invalid mesh for UUID {uuid}.")
+            # 加载 GT 网格 (.stl)
+            gt_mesh = trimesh.load_mesh(item_meta["gt_mesh_path"])
 
-        # normalize mesh
-        center = gt_mesh.bounds[0] + (gt_mesh.bounds[1] - gt_mesh.bounds[0]) / 2.0
-        gt_mesh.apply_translation(-center)
-        scale = 2.0 / max(gt_mesh.extents) if max(gt_mesh.extents) > 1e-6 else 1.0 # Avoid division by zero
-        gt_mesh.apply_scale(scale)
+            if isinstance(gt_mesh, trimesh.Scene):
+                if not gt_mesh.geometry: return None # 场景为空
+                # 尝试合并场景中的所有 Trimesh 对象
+                valid_geometries = [g for g in gt_mesh.geometry.values() if isinstance(g, trimesh.Trimesh) and not g.is_empty]
+                if not valid_geometries: return None # 场景中没有有效的 Trimesh 对象
+                gt_mesh = trimesh.util.concatenate(valid_geometries)
+            
+            if not isinstance(gt_mesh, trimesh.Trimesh) or gt_mesh.is_empty or len(gt_mesh.vertices) == 0:
+                return None
 
-        # sample points
-        point_cloud = self.mesh_to_point_cloud(gt_mesh, self.num_points, self.num_pre_points)
-        if point_cloud is None:
-            RuntimeError(f"Failed to generate point cloud for: {uuid}")
+            # 归一化网格
+            if gt_mesh.bounds is None or max(gt_mesh.extents) <= 1e-9: # 使用更小的阈值并检查 bounds
+                 return None # 无法安全归一化
+            
+            center = gt_mesh.centroid
+            gt_mesh.apply_translation(-center)
+            scale = 2.0 / max(gt_mesh.extents) # 此时 max(gt_mesh.extents) > 0
+            gt_mesh.apply_scale(scale)
+
+            # 采样点云
+            point_cloud = self.mesh_to_point_cloud(gt_mesh, self.num_points, self.num_pre_points)
+
+            if point_cloud is None:
+                return None
+            
+            # 确保返回的点云数量严格等于 self.num_points
+            if point_cloud.shape[0] != self.num_points:
+                return None
+
+        except Exception: # 捕获任何未预料到的错误
+            # print(f"错误: 处理样本 {identifier} 时发生意外错误: {e}") # 可以在 generator 中统一处理日志
+            return None
 
         return {
-            "uuid": uuid,
+            "uuid": identifier, # 保持 'uuid' 作为键名以兼容下游代码
             "point_cloud": point_cloud,
             "prompt": self.im_start_token,
             "chosen": winner_code,
@@ -305,14 +329,37 @@ class Fusion360DPODataset(torch.utils.data.Dataset):
             "loser_code": f"{self.im_start_token}{loser_code}",
         }
 
+def dpo_generator(data_root: str, split: Literal["train", "validation"], num_points: int, num_pre_points: int):
+    # 在内部实例化原始的 PyTorch 数据集
+    # data_root 是类似 "/home/user2/wns/cad-recode/dpo_data" 的路径
+    pytorch_dataset = Fusion360DPODataset(data_root, split, num_points, num_pre_points)
+    
+    if not pytorch_dataset.data: # 如果数据集为空
+        print(f"警告: dpo_generator 未能从 {data_root} 为拆分 '{split}' 加载任何数据。")
+        return # 产生一个空的迭代器
 
-def dpo_generator(fusion360_root: str, split: Literal["train", "test"], num_points: int, num_pre_points: int):
-    # Instantiate your original dataset *internally*
-    pytorch_dataset = Fusion360DPODataset(fusion360_root, split, num_points, num_pre_points)
-    for i in range(len(pytorch_dataset)):
-        item = pytorch_dataset[i]
-        if item is not None:
-            yield item
+    skipped_count = 0
+    total_count = len(pytorch_dataset)
+
+    for i in range(total_count):
+        try:
+            item = pytorch_dataset[i] # __getitem__ 现在可以返回 None
+            if item is not None:
+                yield item
+            else:
+                skipped_count += 1
+        except Exception:
+            # 理论上 __getitem__ 应该自己处理异常并返回 None，但这里再加一层保险
+            skipped_count += 1
+            # print(f"警告: dpo_generator 在处理来自 {data_root} 的样本时捕获到意外异常并跳过。")
+            continue
+    
+    if skipped_count > 0:
+        print(f"信息: dpo_generator 在拆分 '{split}' 的 {total_count} 个总样本中，跳过了 {skipped_count} 个样本。")
+    if skipped_count == total_count and total_count > 0:
+        print(f"警告: dpo_generator 跳过了拆分 '{split}' 中的所有样本。请检查数据质量和处理逻辑。")
+
+
 
 
 @dataclass
@@ -378,12 +425,7 @@ class DataCollatorForDPOCADRecode:
 
         output["point_cloud"] = point_clouds_tensor
 
-        # for k, v in output.items():
-        #     print(f"[DataCollator] output[{k}] = {v.shape if isinstance(v, torch.Tensor) else v}")
-
         return output
-
-
 ######## TRAINER ########
 
 class CADRecodeDPOTrainer(DPOTrainer):
@@ -475,9 +517,6 @@ class CADRecodeDPOTrainer(DPOTrainer):
                 dim=1,
             )
 
-            # Flush left to reduce the memory usage
-            # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
-            #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
             attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
 
             # Truncate right
@@ -497,18 +536,13 @@ class CADRecodeDPOTrainer(DPOTrainer):
                     )
 
             if self.use_logits_to_keep:
-                # Compute logits_to_keep based on loss_mask pattern:
-                # [[0, 0, 0, x, x, x, x],
-                #  [0, 0, 0, x, x, x, 0]]
-                #         ^ start computing logits from here ([:, -(7-3+1):])
+
                 first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
                 logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1  # +1 for the first label
                 model_kwargs["logits_to_keep"] = logits_to_keep
 
             if self.padding_free:
-                # Flatten the input_ids, position_ids, and loss_mask
-                # input_ids = [[a, b, c, 0], ->     input_ids = [[a, b, c, d, e, f, g]]
-                #              [d, e, f, g]]     position_ids = [[0, 1, 2, 0, 1, 2, 3]]
+
                 input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
                 loss_mask = loss_mask[attention_mask.bool()].unsqueeze(0)
                 position_ids = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
@@ -523,12 +557,7 @@ class CADRecodeDPOTrainer(DPOTrainer):
             loss_mask = torch.roll(loss_mask, shifts=-1, dims=1).bool()
 
             if self.use_logits_to_keep:
-                # Align labels with logits
-                # logits:    -,  -, [x2, x3, x4, x5, x6]
-                #                     ^ --------- ^       after logits[:, :-1, :]
-                # labels:   [y0, y1, y2, y3, y4, y5, y6]
-                #                         ^ --------- ^   with logits_to_keep=4, [:, -4:]
-                # loss_mask: [0,  0,  0,  1,  1,  1,  1]
+
                 labels = labels[:, -logits_to_keep:]
                 loss_mask = loss_mask[:, -logits_to_keep:]
 
@@ -585,10 +614,6 @@ class CADRecodeDPOTrainer(DPOTrainer):
 
         # Compute the mean logits
         if self.padding_free:
-            # position_ids contains a sequence of range identifiers (e.g., [[0, 1, 2, 0, 1, 2, 3, ...]]).
-            # There are 2*num_examples ranges in total: the first half corresponds to the chosen tokens,
-            # and the second half to the rejected tokens.
-            # To find the start of the rejected tokens, we look for the num_examples+1-th zero in pos_id.
             split_idx = (position_ids == 0).nonzero(as_tuple=True)[1][num_examples]
             mean_chosen_logits = logits[0, :split_idx][loss_mask[0, :split_idx]].mean()
             mean_rejected_logits = logits[0, split_idx:][loss_mask[0, split_idx:]].mean()
@@ -603,44 +628,41 @@ class CADRecodeDPOTrainer(DPOTrainer):
             output["aux_loss"] = outputs.aux_loss
 
         return output
-
-
 ######## TRAIN ########
 
 if __name__ == "__main__":
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model_id = "filapro/cad-recode-v1.5"
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
+    device = f"cuda:{local_rank}"
+    
+    model_id = "/home/user2/wns/cad-recode/cad-recode-v1.5"
 
     # DPO Specific Hyperparameters
     dpo_beta = 0.1 # Regularization parameter for DPO loss
     dpo_loss_type = "sigmoid" # Common loss type for DPO
 
     # Quantization Config (for QLoRA)
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16
-    )
+    # bnb_config = BitsAndBytesConfig(
+    #     load_in_4bit=True,
+    #     bnb_4bit_use_double_quant=True,
+    #     bnb_4bit_quant_type="nf4",
+    #     bnb_4bit_compute_dtype=torch.bfloat16
+    # )
 
     # Tokenizer
-    tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen2-1.5B', pad_token='<|im_end|>', padding_side='left', trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained('/home/user2/wns/cad-recode/Qwen2-1.5B', pad_token='<|im_end|>', padding_side='left', trust_remote_code=True)
 
     # Model - Load with quantization
     model = CADRecode.from_pretrained(
         model_id,
-        quantization_config=bnb_config,
+        # quantization_config=bnb_config,
         torch_dtype=torch.bfloat16, # Load in compute dtype
         attn_implementation="flash_attention_2" if torch.cuda.is_available() else None,
-        device_map="auto", # Automatically distribute model layers
+        device_map={'': torch.cuda.current_device()}, # Automatically distribute model layers
     )
-    # DPOTrainer requires a reference model for KL divergence calculation.
-    # If not provided, it creates a copy internally. For QLoRA, providing
-    # one explicitly can sometimes save memory, but needs careful handling
-    # with device maps and quantization. For simplicity, let DPOTrainer handle it.
+
     model_ref = None
-    # If you wanted to create one manually (advanced):
-    # model_ref = CADRecode.from_pretrained(...) # Load another copy
 
     # Prepare model for K-bit training (important for QLoRA)
     model = prepare_model_for_kbit_training(model)
@@ -670,9 +692,6 @@ if __name__ == "__main__":
     print("Trainable parameters *after* unfreezing point_encoder:")
     model.print_trainable_parameters()
 
-    # Datasets
-    # Define the features matching your __getitem__ output dictionary
-    # Adjust dtypes and shapes as necessary
     dpo_features = Features({
         'uuid': Value('string'),
         'point_cloud': Array2D(dtype="float32", shape=(NUM_POINT_TOKENS, 3)), # Or Sequence(Sequence('float32')) if preferred
@@ -686,7 +705,7 @@ if __name__ == "__main__":
         dpo_generator,
         features=dpo_features,
         gen_kwargs={ # Pass arguments to your generator function
-            "fusion360_root": "Fusion360/r1.0.1",
+            "data_root": "/home/user2/wns/cad-recode/dpo_data",
             "split": "train",
             "num_points": NUM_POINT_TOKENS,
             "num_pre_points": 8192 # Or pass your actual num_pre_points
@@ -711,11 +730,11 @@ if __name__ == "__main__":
     training_args = DPOConfig(
         output_dir=f"cad-recode-dpo-lr{lr}",
         num_train_epochs=3,
-        per_device_train_batch_size=2, # Adjust based on GPU memory
-        per_device_eval_batch_size=2,
-        gradient_accumulation_steps=8, # Effective batch size = 8 * 2 = 16
+        per_device_train_batch_size=1, # Adjust based on GPU memory
+        per_device_eval_batch_size=1,
+        gradient_accumulation_steps=16, # Effective batch size = 8 * 2 = 16
         gradient_checkpointing=True, # Already enabled in model, TRL uses it too
-        optim="paged_adamw_32bit", # Paged optimizer for QLoRA
+        # optim="paged_adamw_32bit", # Paged optimizer for QLoRA
         learning_rate=lr, # Adjust as needed
         lr_scheduler_type="cosine", # Cosine scheduler is common
         logging_steps=10,
@@ -730,18 +749,18 @@ if __name__ == "__main__":
         warmup_ratio=0.03,
         weight_decay=0.01, # Added weight decay
         push_to_hub=False, # Set to True to push checkpoints to HF Hub
-        report_to="wandb", #"tensorboard"
+        report_to="tensorboard", #"tensorboard"
         gradient_checkpointing_kwargs={"use_reentrant": False},
         # dataset_text_field="", # Not needed with custom collator handling everything
         # dataset_kwargs={"skip_prepare_dataset": True}, # Crucial
         remove_unused_columns=False, # Important: Keep point_cloud column
     )
 
-    wandb.init(
-        project="CADRecodeDPO",
-        name="cad-recode-dpo-logs",
-        config=training_args,
-    )
+    # wandb.init(
+    #     project="CADRecodeDPO",
+    #     name="cad-recode-dpo-logs",
+    #     config=training_args,
+    # )
 
     trainer = CADRecodeDPOTrainer(
         model=model,
@@ -764,5 +783,5 @@ if __name__ == "__main__":
     trainer.save_model(f"cad-recode-dpo-lr{lr}-final")
     tokenizer.save_pretrained(f"cad-recode-dpo-lr{lr}-final")
 
-    wandb.finish()
+    # wandb.finish()
     print("DPO Training Finished.")

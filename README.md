@@ -27,7 +27,9 @@ pip install -r requirements.txt
 
 ### DPO
 
-DPO训练的代码我还没改，我后面会改的。或者你有时间可以自己改改。
+DPO训练的代码已经修改。
+
+在2000多个对上进行了DPO（但是batch设置为1，超级小，因为我大一点疑似单卡就会oom），这代码是能跑的，但是发现损失和奖励边界一直在波动。希望是我训的数据不够导致的。也有可能需要检查训练代码是否有问题。
 
 数据集构造的代码也只是从原本的[fusion360](https://github.com/AutodeskAILab/Fusion360GalleryDataset)切换到了[cad-recode-v1.5](https://huggingface.co/datasets/filapro/cad-recode-v1.5)上。
 
@@ -74,6 +76,7 @@ DPO数据生成完成，我这里有2617个对。
 - `generate_stl_in_batch.py`可用于批量生成stl文件；
 - `move_dpopair.py`可用于批量移动一整个batch生成的对和gt移动到对应的文件夹中；
 - `check.py`可用于检查是否有哪个gt没有对应的胜败对。可能会有有gt无胜败对存在的情况！
+- `data_split.py`会读取`ground_truth`中的所有条目并根据设定的比例划分训练验证集，写入`train_val.json`文件。注意：我没有实现dpo训练的验证集逻辑！根据描述，dpo训练的验证比较复杂，因此没有用。
 
 
 ## Inference
