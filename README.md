@@ -27,9 +27,54 @@ pip install -r requirements.txt
 
 ### DPO
 
-因为数据集还没构建完成，DPO训练的代码我还没改。
+DPO训练的代码我还没改，我后面会改的。或者你有时间可以自己改改。
 
 数据集构造的代码也只是从原本的[fusion360](https://github.com/AutodeskAILab/Fusion360GalleryDataset)切换到了[cad-recode-v1.5](https://huggingface.co/datasets/filapro/cad-recode-v1.5)上。
+
+DPO数据生成完成，我这里有2617个对。
+
+数据的组织形式：
+
+```
+├── dpo_data
+├── train_val.json
+├── cadquery
+│   ├── uuid1(train_batch_63_630020)_loser.py
+│   ├── uuid2(train_batch_63_630020)_winner.py
+│   ...
+│   └── uuidN_winner.py
+├── ground_truth
+│   ├── uuid1(train_batch_63_630020).py
+│   ...
+│   └── uuidN.py
+└── reconstruction
+    ├── uuid1(train_batch_63_630020).stl
+    ...
+    └── uuidN.stl
+```
+
+其中`cadquery`存储了所有生成的胜败对；`ground_truth`存储了数据集中原始的gt脚本；`reconstruction`中存储有已经转换完成的stl文件，可以直接采样生成点云作为模型输入；`train_val.json`中有训练验证集的划分，如下：
+
+```json
+{
+    "train": [
+        "uuid1",
+        "uuid2",
+        // ...
+    ],
+    "validation": [
+        "uuid_val1",
+        "uuid_val2",
+        // ...
+    ]
+}
+```
+
+- `generate_stl.py`可用于生成单个stl文件；
+- `generate_stl_in_batch.py`可用于批量生成stl文件；
+- `move_dpopair.py`可用于批量移动一整个batch生成的对和gt移动到对应的文件夹中；
+- `check.py`可用于检查是否有哪个gt没有对应的胜败对。可能会有有gt无胜败对存在的情况！
+
 
 ## Inference
 
