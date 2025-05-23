@@ -19,6 +19,11 @@ conda activate cadrecode
 pip install -r requirements.txt
 ```
 
+## Inference
+
+- `demo.ipynb`可以跑原始qwen2的推理；
+- `demo copy.ipynb`可以跑qwen3的推理。
+
 ## Training
 
 ### SFT
