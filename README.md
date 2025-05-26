@@ -22,14 +22,18 @@ pip install -r requirements.txt
 ## Inference
 
 - `demo.ipynb`可以跑原始qwen2的推理；
-- `demo copy.ipynb`可以跑qwen3的推理。
+- `demo_qwen3_nolora.ipynb`可以跑qwen3的推理，且权重没有使用lora训练。
+- `demo_qwen3_lora.ipynb`可以跑qwen3的推理，且权重使用了lora训练。
 
 ## Training
 
 ### SFT
 
-在`train.py`中我实现了利用[qwen3 1.7B](https://huggingface.co/Qwen/Qwen3-1.7B)进行SFT。这里我默认不能稳定直连huggingface，因此所有权重都是放在本地进行的训练。如要运行，请自己修改内部的相关路径。
+在`train.py`中实现了利用[qwen3 1.7B](https://huggingface.co/Qwen/Qwen3-1.7B)进行SFT。这里我默认不能稳定直连huggingface，因此所有权重都是放在本地进行的训练。如要运行，请自己修改内部的相关路径。**注意：这里面有严重的问题！由于用了lora进行微调，并且给所有线性层加上了lora adaptor，但是保存的时候只会保存LLM内部的adaptor！线性层权重没有保存！**
 
+在`train_A100.py`中实现了全量微调。
+
+在`train_lora_savelinear.py`中实现了用lora微调并保存线性层权重（这个版本中，我没有保存linear encoder的lora权重，然而令人惊奇的是，就是这种能够给出不错的结果，如果我把lora adaptor存了并在推理时进行加载，在训了好一会儿之后反而效果很差）。
 ### DPO
 
 DPO训练的代码已经修改。
@@ -84,9 +88,6 @@ DPO数据生成完成，我这里有2617个对。
 - `data_split.py`会读取`ground_truth`中的所有条目并根据设定的比例划分训练验证集，写入`train_val.json`文件。注意：我没有实现dpo训练的验证集逻辑！根据描述，dpo训练的验证比较复杂，因此没有用。
 
 
-## Inference
-
-`demo.ipynb`可以利用现有的权重进行推理。依旧是默认无法稳定直连`huggingface`，因此需要自行clone[训练完成的模型权重](https://huggingface.co/filapro/cad-recode-v1.5)和[qwen2 1.5B](https://huggingface.co/Qwen/Qwen2-1.5B)(用来提供tokenizer)。
 
 ## relevant
 
