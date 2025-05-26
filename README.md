@@ -29,11 +29,11 @@ pip install -r requirements.txt
 
 ### SFT
 
-在`train.py`中实现了利用[qwen3 1.7B](https://huggingface.co/Qwen/Qwen3-1.7B)进行SFT。这里我默认不能稳定直连huggingface，因此所有权重都是放在本地进行的训练。如要运行，请自己修改内部的相关路径。**注意：这里面有严重的问题！由于用了lora进行微调，并且给所有线性层加上了lora adaptor，但是保存的时候只会保存LLM内部的adaptor！线性层权重没有保存！**
+在`train.py`中实现了利用[qwen3 1.7B](https://huggingface.co/Qwen/Qwen3-1.7B)进行SFT。这里我默认不能稳定直连huggingface，因此所有权重都是放在本地进行的训练。如要运行，请自己修改内部的相关路径。**注意：这里面有严重的问题！由于用了lora进行微调，并且给所有线性层加上了lora adapter，但是保存的时候只会保存LLM内部的adapter！线性层权重没有保存！**
 
 在`train_A100.py`中实现了全量微调。
 
-在`train_lora_savelinear.py`中实现了用lora微调并保存线性层权重（这个版本中，我没有保存linear encoder的lora权重，然而令人惊奇的是，就是这种能够给出不错的结果，如果我把lora adaptor存了并在推理时进行加载，在训了好一会儿之后反而效果很差）。
+在`train_lora_savelinear.py`中实现了用lora微调并保存线性层权重（这个版本中，我没有保存linear encoder的lora权重，然而令人惊奇的是，就是这种能够给出不错的结果，如果我把lora adapter存了并在推理时进行加载，在训了好一会儿之后反而效果很差）。
 ### DPO
 
 DPO训练的代码已经修改。
