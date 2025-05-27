@@ -4,12 +4,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import trimesh
-from peft import PeftModel, LoraConfig, get_peft_model
+from peft import PeftModel
 from pytorch3d.ops import sample_farthest_points
 from scipy.spatial import cKDTree
 from tqdm import tqdm
 from transformers import (
-    AutoTokenizer, Qwen2ForCausalLM, Qwen2Model, PreTrainedModel, AutoModelForCausalLM)
+    AutoTokenizer, Qwen2ForCausalLM, Qwen2Model, PreTrainedModel)
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 
@@ -115,7 +115,7 @@ class CADRecode(Qwen2ForCausalLM):
 
 
 class Fusion360EvalDataset(torch.utils.data.Dataset):
-    def __init__(self, fusion360_root: str, num_points: int = 256, num_pre_points: int = 8192) -> None:
+    def __init__(self, fusion360_root: str, num_points: int = 512, num_pre_points: int = 8192) -> None:
         self.data = []
         with open(os.path.join(fusion360_root, f"train_test.json"), 'r') as f:
             uuid_list = json.load(f)["test"]
@@ -188,112 +188,22 @@ class Fusion360EvalDataset(torch.utils.data.Dataset):
 
 
 if __name__ == '__main__':
-    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    # attn_implementation = 'flash_attention_2' if torch.cuda.is_available() else None
-    # tokenizer = AutoTokenizer.from_pretrained(
-    #     '/home/user2/wns/cad-recode/Qwen2-1.5B',
-    #     pad_token='<|im_end|>',
-    #     padding_side='left')
-    # model = CADRecode.from_pretrained(
-    #     '/home/user2/wns/cad-recode/cad-recode-v1.5',
-    #     torch_dtype=torch.bfloat16,
-    #     attn_implementation=attn_implementation).eval().to(device)
-    # model.to(torch.bfloat16)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    attn_implementation = 'flash_attention_2' if torch.cuda.is_available() else None
+    tokenizer = AutoTokenizer.from_pretrained(
+        '/home/user2/wns/cad-recode/Qwen2-1.5B',
+        pad_token='<|im_end|>',
+        padding_side='left')
+    model = CADRecode.from_pretrained(
+        '/home/user2/wns/cad-recode/cad-recode-v1.5',
+        torch_dtype='auto',
+        attn_implementation=attn_implementation).eval().to(device)
+
     # CHECKPOINT_DIR = "cad-recode-dpo-lr1e-06-final"
     # model = CADRecode.from_pretrained(
     #     CHECKPOINT_DIR,
     #     torch_dtype=torch.bfloat16,
     # ).eval().to(device)
-    BASE_MODEL_PATH = '/home/user2/wns/cad-recode/Qwen3-1.7B'
-    CHECKPOINT_DIR = '/home/user2/wns/cad-recode/cad-recode-qwen3/checkpoint-68200' 
-    POINT_ENCODER_WEIGHTS_PATH = os.path.join(CHECKPOINT_DIR, "point_encoder_weights.bin")
-
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    attn_implementation = 'flash_attention_2' if torch.cuda.is_available() else None
-
-    print(f"Loading full model from checkpoint: {CHECKPOINT_DIR}")
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        BASE_MODEL_PATH,
-        pad_token='<|im_end|>',
-        padding_side='left',
-        trust_remote_code=True
-    )
-    print(f"Tokenizer loaded from: {BASE_MODEL_PATH}")
-
-    # 1. 加载原始的基础 LLM 模型 (Qwen3ForCausalLM)
-    print(f"Loading base LLM (Qwen3ForCausalLM) from: {BASE_MODEL_PATH}")
-    base_llm = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL_PATH,
-        torch_dtype=torch.bfloat16, 
-        attn_implementation=attn_implementation,
-        trust_remote_code=True
-    )
-    print("Base LLM loaded.")
-
-    # 2. 实例化你的 CADRecode 模型。
-    # 此时，model 的 Qwen 部分和 point_encoder 都是随机初始化的。
-    print("Instantiating CADRecode model structure (initially random weights for Qwen and point_encoder)...")
-    model = CADRecode(base_llm.config) 
-
-    # 3. 将加载了预训练权重的 base_llm 的核心 Qwen 结构赋值给 CADRecode 实例的相应属性。
-    # 这样 CADRecode 的 Qwen 部分就有了预训练权重。
-    model.model = base_llm.model # 赋值 Qwen3Model 实例
-    model.lm_head = base_llm.lm_head # 赋值 Qwen3 的语言模型头
-    print("Base LLM's core model and lm_head assigned to CADRecode instance.")
-
-    # 4. 定义 PEFT LoRA 配置。
-    # **关键修改：明确指定 target_modules，排除 point_encoder 的线性层。**
-    # Qwen 系列模型的线性层名称通常是：q_proj, k_proj, v_proj, o_proj (注意力层),
-    # 以及 gate_proj, up_proj, down_proj (MLP层)。
-    # 请确保这个列表涵盖了 Qwen3 中所有需要 LoRA 的线性层，但不包含你的 `point_encoder` 中的线性层。
-    peft_config_for_loading = LoraConfig(
-        r=64,
-        lora_alpha=16,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj", 
-            "gate_proj", "up_proj", "down_proj"
-        ], 
-        lora_dropout=0.1,
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-
-    # 5. **将整个 CADRecode 实例应用 PEFT LoRA。**
-    # 这一步会返回一个 `PeftModelForCausalLM` 实例，它包装了 `CADRecode`。
-    # 由于 `target_modules` 已排除 point_encoder，所以 `point_encoder` 将不会被 LoRA 化。
-    print("Applying PEFT LoRA to the CADRecode model structure (only Qwen layers will be wrapped)...")
-    model = get_peft_model(model, peft_config_for_loading) 
-    print("CADRecode model (now a PeftModelForCausalLM) prepared.")
-
-    # 6. **加载 LoRA 权重。**
-    # `model` 现在是 `PeftModelForCausalLM` 的实例。
-    # `PeftModel` 的 `load_adapter` 方法会从指定目录加载 `adapter_model.safetensors` 并应用到 `model` 中。
-    print(f"Loading LoRA adapters for base LLM layers from: {CHECKPOINT_DIR}")
-    model.load_adapter(CHECKPOINT_DIR, adapter_name="default")
-    print("LoRA adapters for base LLM layers loaded.")
-
-    # 7. **手动加载 point_encoder 的权重。**
-    # `model` 是 `PeftModelForCausalLM`，访问其原始 `CADRecode` 实例需要 `model.base_model.model`。
-    # 由于 `point_encoder` 现在没有被 LoRA 化，`model.base_model.model.point_encoder` 是一个标准的 `FourierPointEncoder`。
-    # 它期望 `point_encoder_state_dict` 包含 `projection.weight` 和 `projection.bias`。
-    print(f"Attempting to load point_encoder weights from: {POINT_ENCODER_WEIGHTS_PATH}")
-    if os.path.exists(POINT_ENCODER_WEIGHTS_PATH):
-        point_encoder_state_dict = torch.load(POINT_ENCODER_WEIGHTS_PATH, map_location='cpu')
-        
-        # 这一行应该能成功，因为现在 point_encoder 是非 LoRA 化的，
-        # 并且你确认保存的权重也是非 LoRA 化的。
-        model.base_model.model.point_encoder.load_state_dict(point_encoder_state_dict, strict=True) 
-        print("Point_encoder weights loaded successfully.")
-    else:
-        print(f"Error: {POINT_ENCODER_WEIGHTS_PATH} not found. 'point_encoder' will be randomly initialized.")
-        print("Please ensure the specified CHECKPOINT_DIR contains 'point_encoder_weights.bin'.")
-
-    # 8. 将整个 CADRecode 模型（现在包含所有组件）移动到设备并设置为评估模式
-    # .to(device) 应该在所有权重加载完成后进行，以确保所有模块都在正确的设备上。
-    model.eval().to(device)
-    print("Full model (CADRecode with Qwen3-1.7B + LoRA + trained point_encoder) ready for inference.")
-
 
     fusion360_dataset = Fusion360EvalDataset("/home/user2/wns/cad-recode/r1.0.1")
     eval_summary = {}

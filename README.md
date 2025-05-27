@@ -24,6 +24,7 @@ pip install -r requirements.txt
 - `demo.ipynb`可以跑原始qwen2的推理；
 - `demo_qwen3_nolora.ipynb`可以跑qwen3的推理，且权重没有使用lora训练。
 - `demo_qwen3_lora.ipynb`可以跑qwen3的推理，且权重使用了lora训练。
+- `demo_realinput.py`可以直接读取点云文件进行推理，以面对实际场景。
 
 ## Training
 
@@ -33,16 +34,10 @@ pip install -r requirements.txt
 
 在`train_A100.py`中实现了全量微调。
 
-在`train_lora_savelinear.py`中实现了用lora微调并保存线性层权重（这个版本中，我没有保存linear encoder的lora权重，然而令人惊奇的是，就是这种能够给出不错的结果，如果我把lora adapter存了并在推理时进行加载，在训了好一会儿之后反而效果很差）。
+在`train_lora_savelinear.py`中实现了用lora微调并保存线性层权重
 ### DPO
 
-DPO训练的代码已经修改。
-
-在2000多个对上进行了DPO（但是batch设置为1，超级小，因为我大一点疑似单卡就会oom），这代码是能跑的，但是发现损失和奖励边界一直在波动。希望是我训的数据不够导致的。也有可能需要检查训练代码是否有问题。
-
-数据集构造的代码也只是从原本的[fusion360](https://github.com/AutodeskAILab/Fusion360GalleryDataset)切换到了[cad-recode-v1.5](https://huggingface.co/datasets/filapro/cad-recode-v1.5)上。
-
-DPO数据生成完成，我这里有2617个对。
+数据集构造的代码在[cad-recode-v1.5](https://huggingface.co/datasets/filapro/cad-recode-v1.5)上运行。
 
 数据的组织形式：
 
