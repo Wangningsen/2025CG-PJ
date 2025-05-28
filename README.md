@@ -2,7 +2,7 @@
 
 🤗 Models and datasets are [here](https://huggingface.co/ljbro/2025CG).
 
-This is the repository for COMP130018.01 Computer Graph A final PJ: CAD-PrefLM: Reverse Engineering CAD Models with LLMs via Direct Preference Optimization.
+This is the repository for Fudan University 25Spring COMP130018.01 Computer Graph A final PJ: CAD-PrefLM: Reverse Engineering CAD Models with LLMs via Direct Preference Optimization.
 
 ## Environment Setup
 
