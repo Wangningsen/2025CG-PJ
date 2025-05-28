@@ -1,16 +1,12 @@
 # 2025 CG PJ
 
-这是2025 CG PJ: CAD。
+This is the repository for COMP130018.01 Computer Graph A final PJ: CAD-PrefLM: Reverse Engineering CAD Models with LLMs via Direct Preference Optimization.
 
 ## Environment Setup
 
-请自己手动安装[pytorch3d](https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md)，[open3d](https://pypi.org/project/open3d/)以及适合的[torch](https://pytorch.org/get-started/locally/)版本。
+Please install [pytorch3d](https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md)，[open3d](https://pypi.org/project/open3d/)and suitable [torch](https://pytorch.org/get-started/locally/) version.
 
-我将原本的`dockerfile`转换为了`requirenments.txt`，我可以在自己的服务器上正常搭建环境，服务器设置为：
-
-- ubuntu 22.04
-- cuda 12.4
-- torch 2.5.1
+Follow the instructions below: 
 
 ```bash
 conda create -n cadrecode python=3.10 -y
@@ -21,7 +17,9 @@ pip install -r requirements.txt
 
 ## Inference
 
-- `demo.ipynb`可以跑原始qwen2的推理；
+Within [inference](./inference):
+
+- [`demo.ipynb`](./inference/demo.ipynb)可以跑原始qwen2的推理；
 - `demo_qwen3_nolora.ipynb`可以跑qwen3的推理，且权重没有使用lora训练。
 - `demo_qwen3_lora.ipynb`可以跑qwen3的推理，且权重使用了lora训练。
 - `demo_realinput.py`可以直接读取点云文件进行推理，以面对实际场景。
