@@ -1,10 +1,12 @@
 # 2025 CG PJ
 
+🤗 Models and datasets are [here](https://huggingface.co/ljbro/2025CG).
+
 This is the repository for COMP130018.01 Computer Graph A final PJ: CAD-PrefLM: Reverse Engineering CAD Models with LLMs via Direct Preference Optimization.
 
 ## Environment Setup
 
-Please install [pytorch3d](https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md)，[open3d](https://pypi.org/project/open3d/)and suitable [torch](https://pytorch.org/get-started/locally/) version.
+Please install [pytorch3d](https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md)，[open3d](https://pypi.org/project/open3d/) and suitable [torch](https://pytorch.org/get-started/locally/) version.
 
 Follow the instructions below: 
 
@@ -17,27 +19,41 @@ pip install -r requirements.txt
 
 ## Inference
 
-Within [inference](./inference):
+Within the [`inference`](./inference/) directory, you'll find various demonstrations to help you run different inference scenarios:
 
-- [`demo.ipynb`](./inference/demo.ipynb)可以跑原始qwen2的推理；
-- `demo_qwen3_nolora.ipynb`可以跑qwen3的推理，且权重没有使用lora训练。
-- `demo_qwen3_lora.ipynb`可以跑qwen3的推理，且权重使用了lora训练。
-- `demo_realinput.py`可以直接读取点云文件进行推理，以面对实际场景。
+- **[`demo.ipynb`](./inference/demo.ipynb)**: This notebook is designed for running the baseline Qwen2 CAD-Recode inference.
+- **[`demo_qwen3_nolora.ipynb`](./inference/demo_qwen3_nolora.ipynb)**: Use this notebook to perform inference with the fine-tuned Qwen3 model that was trained *without* LoRA.
+- **[`demo_qwen3_lora.ipynb`](./inference/demo_qwen3_lora.ipynb)**: This notebook is for running inference with the fine-tuned Qwen3 model that *was* trained with LoRA.
+- **[`demo_realinput.py`](./inference/demo_realinput.py)**: This script directly reads reconstructed point cloud files and performs inference, simulating a real-world deployment scenario.
+
 
 ## Training
 
 ### SFT
 
-在`train.py`中实现了利用[qwen3 1.7B](https://huggingface.co/Qwen/Qwen3-1.7B)进行SFT。这里我默认不能稳定直连huggingface，因此所有权重都是放在本地进行的训练。如要运行，请自己修改内部的相关路径。**注意：这里面有严重的问题！由于用了lora进行微调，并且给所有线性层加上了lora adapter，但是保存的时候只会保存LLM内部的adapter！线性层权重没有保存！**
+We want to be transparent about our training efforts. While we've seen success with some models, we hit a significant roadblock trying to fine-tune **Qwen3 1.7B** with the **CAD-Recode v1.5 dataset** to outperform the original CAD-Recode model (which uses Qwen2 1.5B). Despite tremendous effort and numerous training epochs, our fine-tuned Qwen3 model consistently failed to generate any correct answers on the Fusion360 test set.
 
-在`train_A100.py`中实现了全量微调。
+The training codes for the original CAD-Recode model aren't publicly available. We're sharing our findings and genuinely hope the community can help shed light on this issue. Solving this problem would be a big step forward!
 
-在`train_lora_savelinear.py`中实现了用lora微调并保存线性层权重
+---
+
+In the [`train`](./train/) directory, you'll find these training scripts:
+
+- **[`train_qwen3_full.py`](./train/train_qwen3_full.py)**: This script lets you train **Qwen3 1.7B** with full parameters, *without* LoRA.
+- **[`train_qwen3_lora.py`](./train/train_qwen3_lora.py)**: Use this script to train **Qwen3 1.7B** *with* LoRA.
+
+---
+
+
 ### DPO
 
-数据集构造的代码在[cad-recode-v1.5](https://huggingface.co/datasets/filapro/cad-recode-v1.5)上运行。
 
-数据的组织形式：
+#### dataset
+
+We construct our DPO dataset utilizing [cad-recode-v1.5](https://huggingface.co/datasets/filapro/cad-recode-v1.5).
+
+How the dataset is organized:
+
 
 ```
 ├── dpo_data
@@ -57,7 +73,7 @@ Within [inference](./inference):
     └── uuidN.stl
 ```
 
-其中`cadquery`存储了所有生成的胜败对；`ground_truth`存储了数据集中原始的gt脚本；`reconstruction`中存储有已经转换完成的stl文件，可以直接采样生成点云作为模型输入；`train_val.json`中有训练验证集的划分，如下：
+`cadquery` contains all chosen-rejected pairs generated; `ground_truth` contains the CADquery codes from the original dataset; `reconstruction` contains all transferred .stl files from ground-truth codes; `train_val.json`  contains train-val split as follows:
 
 ```json
 {
@@ -74,16 +90,34 @@ Within [inference](./inference):
 }
 ```
 
-- `generate_stl.py`可用于生成单个stl文件；
-- `generate_stl_in_batch.py`可用于批量生成stl文件；
-- `move_dpopair.py`可用于批量移动一整个batch生成的对和gt移动到对应的文件夹中；
-- `check.py`可用于检查是否有哪个gt没有对应的胜败对。可能会有有gt无胜败对存在的情况！
-- `data_split.py`会读取`ground_truth`中的所有条目并根据设定的比例划分训练验证集，写入`train_val.json`文件。注意：我没有实现dpo训练的验证集逻辑！根据描述，dpo训练的验证比较复杂，因此没有用。
+The dataset is publicly accessible [here](https://huggingface.co/ljbro/2025CG).
+
+In the [`train`](./train/) directory, you'll find the following scripts for DPO training:
+- **[`train_dpo_full.py`](./train/train_dpo_full.py)**: Use this script to perform DPO training with the full parameters of the CAD-Recode baseline checkpoint.
+- **[`train_dpo_lora.py`](./train/train_dpo_full.py)**: This script allows you to perform DPO training on the CAD-Recode baseline checkpoint using LoRA.
+
+If you want to construct your own dataset, we provide some handful gadgets for you to quickly hands on in [`tool`](./tool/) directory:
+- **[`generate_stl.py`](./tool/generate_stl.py)** can generate single .stl file for CADquery.
+- **[`generate_stl_in_batch.py`](./tool/generate_stl_in_batch.py)** can generate multiple .stl files in batch.
+- **[`move_dpopair.py`](./tool/move_dpopair.py)** can move a whole batch of pairs and ground-truth into corresponding directories.
+- **[`check.py`](./tool/check.py)** can be used to check whether there is no corresponding pair for each ground-truth.
+- **[`data_split.py`](./tool/data_split.py)**
+ can scan the whole ground-truth items and split the dataset into train and val with the ratio you set.
+
+If you wish to construct your own dataset, we offer several convenient utilities in the [`tool`](./tool/) directory to help you quickly get started:
+
+- **[`generate_stl.py`](./tool/generate_stl.py)**: This script generates a single `.stl` file from CADquery code.
+- **[`generate_stl_in_batch.py`](./tool/generate_stl_in_batch.py)**: Use this script to generate multiple `.stl` files in a batch process.
+- **[`move_dpopair.py`](./tool/move_dpopair.py)**: This utility can move an entire batch of DPO pairs and their corresponding ground-truth files into designated directories.
+- **[`check.py`](./tool/check.py)**: This script can be used to verify that every ground-truth entry has a corresponding pair.
+- **[`data_split.py`](./tool/data_split.py)**: This script scans all ground-truth items and splits the dataset into training and validation sets based on a user-defined ratio.
+
+## Multiple Images to Point Cloud
+
+In the [multi-view](./multi-view/) directory, you'll find our script for converting multiple images into a point cloud. We believe that multi-view images are significantly more accessible than pre-existing 3D point cloud data. You can utilize this script to transform a set of images into a point cloud representation and then feed it to the model. Perhaps this approach will lead to successful CADquery generation!
 
 
+## Relevant Repositories
 
-## relevant
-
-原始代码：https://github.com/filaPro/cad-recode/tree/main?tab=readme-ov-file
-
-有人尝试复现的代码：https://github.com/kakukakujirori/cad-recode?tab=readme-ov-file
+- **Original Implementation**: You can find the original CAD-Recode project [here](https://github.com/filaPro/cad-recode/tree/main?tab=readme-ov-file).
+- **Training Reimplementation**: A fantastic reimplementation effort for the training process is available [here](https://github.com/kakukakujirori/cad-recode?tab=readme-ov-file).
