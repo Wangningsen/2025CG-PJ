@@ -1,3 +1,0 @@
-import cadquery as cq
-w0=cq.Workplane('ZX',origin=(0,76,0))
-r=w0.workplane(offset=-152/2).box(96,200,152)
