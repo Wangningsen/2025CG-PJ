@@ -35,14 +35,14 @@ We want to be transparent about our training efforts. While we've seen success w
 
 The training codes for the original CAD-Recode model aren't publicly available. We're sharing our findings and genuinely hope the community can help shed light on this issue. Solving this problem would be a big step forward!
 
----
+
 
 In the [`train`](./train/) directory, you'll find these training scripts:
 
 - **[`train_qwen3_full.py`](./train/train_qwen3_full.py)**: This script lets you train **Qwen3 1.7B** with full parameters, *without* LoRA.
 - **[`train_qwen3_lora.py`](./train/train_qwen3_lora.py)**: Use this script to train **Qwen3 1.7B** *with* LoRA.
 
----
+
 
 
 ### DPO
